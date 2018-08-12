@@ -1,12 +1,18 @@
-var Course = require('../../models/Assignments/Course');
-var Assignment = require('../../models/Assignments/Assignment');
+var Course = require('../../models/assignments/Course');
+var Assignment = require('../../models/assignments/Assignment');
 var requireRole = require('../../middleware/Token').requireRole;
 var verifyUser = require('../../middleware/Token').verifyUser;
 var assignmentCheck = require('../../middleware/fileStorage').assignmentCheck;
-var fileDB = require('../../middleware/fileStorage').fileDB;
+// var fileDB = require('../../middleware/fileStorage').fileDB;
+const File = require('../../models/Files');
+var diskStorage = require('../../middleware/fileStorage').diskStorage;
+var fileUpload = require('../../middleware/fileStorage').fileUpload;
+var downloadFile = require('../../middleware/fileStorage').downloadFile;
+var dir = process.cwd() + '/../temp';
+var keyName = "inputFile";
 
 module.exports = (app) => {
-    app.get('/api/assignments/:userID/courses', function (req, res) {
+    app.get('/api/assignments/:userID/courses', verifyUser, function (req, res) {
         if (!req.params.userID) {
             return res.status(400).send({
                 success: false,
@@ -14,10 +20,11 @@ module.exports = (app) => {
             });
         }
 
-        Course.find({
-            students: req.params.userID,
-            isDeleted: false
-        }, (err, courses) => {
+        var search = { isDeleted: false };
+        if(req.role == 'student') search.students = req.user_id;
+        else if(req.role == 'prof') search.professors = req.user_id;
+
+        Course.find(search, (err, courses) => {
             if (err) {
                 return res.status(500).send({
                     success: false,
@@ -40,33 +47,32 @@ module.exports = (app) => {
         });
     })
 
-    app.get('/api/assignments/:courseCode/assignments', function (req, res) {
-        var courseCode = req.params.courseCode;
-        if (!courseCode) {
+    app.get('/api/assignments/:courseID/assignments', function (req, res) {
+        var courseID = req.params.courseID;
+        if (!courseID) {
             return res.status(400).send({
                 success: false,
-                message: 'CourseCode not in parameters'
+                message: 'courseID not in parameters'
             });
         }
         Course.find({
-            code: courseCode,
+            _id: courseID,
             isDeleted: false
-        }, (err, courses) => {
+        }, (err, course) => {
             if (err) {
                 return res.status(500).send({
                     success: false,
                     message: "Error: Server error."
                 });
             }
-            if (courses.length < 1) {
+            if (!course) {
                 return res.status(404).send({
                     success: false,
-                    message: 'Error: No courses found.'
+                    message: 'Error: No course found.'
                 });
             }
-            var course = courses[0];
             Assignment.find({
-                course: course._id,
+                course: courseID,
                 isDeleted: false
             }, (err, assignments) => {
                 if (err) {
@@ -76,7 +82,7 @@ module.exports = (app) => {
                     });
                 }
 
-                if (assignments.length < 1) {
+                if (assignments.length == 0) {
                     return res.status(404).send({
                         success: false,
                         message: 'Error: No assignments found for this course.'
@@ -93,36 +99,36 @@ module.exports = (app) => {
         })
     })
 
-    app.get('/api/assignments/:courseCode/:userID/assignments', function (req, res) {
-        var courseCode = req.params.courseCode;
+    //Endpoint for viewing Assignments to be submitted by User in a Course
+    app.get('/api/assignments/:courseID/:userID/new', function (req, res) {
+        var courseID = req.params.courseID;
         var userID = req.params.userID;
-        if (!courseCode || !userID) {
+        if (!courseID || !userID) {
             return res.status(400).send({
                 success: false,
-                message: 'CourseCode, UserID required.'
+                message: 'courseID, userID required.'
             });
         }
         Course.find({
-            code: courseCode,
+            _id: courseID,
             isDeleted: false
-        }, (err, courses) => {
+        }, (err, course) => {
             if (err) {
                 return res.status(500).send({
                     success: false,
                     message: "Error: Server error."
                 });
             }
-            if (courses.length < 1) {
+            if (!course) {
                 return res.status(404).send({
                     success: false,
-                    message: 'Error: No courses found.'
+                    message: 'Error: No course found.'
                 });
             }
-            var course = courses[0];
             Assignment.find({
-                course: course._id,
+                course: courseID,
                 submissions: {
-                    "$not": { "$elemMatch": { user: user._id } },
+                    "$not": {"$elemMatch": {"user": userID}}
                 },
                 isDeleted: false
             }, (err, assignments) => {
@@ -132,24 +138,19 @@ module.exports = (app) => {
                         message: "Error: Server error."
                     });
                 }
-
-                if (assignments.length < 1) {
-                    return res.status(404).send({
-                        success: false,
-                        message: 'Error: No assignments found for this course by this user.'
-                    });
+                if(assignments){
+                    var assignments = {assignments}
                 }
-
                 return res.status(200).send({
                     success: true,
                     message: "Details successfully retrieved.",
-                    assignments: { assignments }
+                    assignments: assignments
                 });
             });
         })
     })
 
-    app.post('/api/course/:userID/createCourse', requireRole("admin"), function (req, res) {
+    app.post('/api/courses/:userID/createCourse', requireRole('prof'), function (req, res) {
         if (!req.params.userID) {
             return res.status(400).send({
                 success: false,
@@ -225,7 +226,7 @@ module.exports = (app) => {
         })
     })
 
-    app.post('/api/assignment/:userID/createAssignment', function (req, res) {
+    app.post('/api/assignments/:userID/createAssignment', requireRole('prof'), function (req, res) {
         if (!req.params.userID) {
             return res.status(400).send({
                 success: false,
@@ -319,7 +320,7 @@ module.exports = (app) => {
         });
     })
 
-    app.post('/api/assignment/:userID/:assignmentID/upload', verifyUser, assignmentCheck, fileDB, function (req, res, next) {
+    app.all('/api/assignments/:userID/:assignmentID/upload', verifyUser, diskStorage(dir).single(keyName), fileUpload, function (req, res, next) {
         Assignment.findOneAndUpdate({
             _id: req.params.assignmentID,
             isDeleted: false
@@ -327,23 +328,120 @@ module.exports = (app) => {
                 $push: {
                     submissions: {
                         'user': req.params.userID,
-                        'file': req.file._id
                     }
                 }
-            }, { new: true }, function (err, assignment) {
+            }, { new: true }, function(err, assignment) {
                 if (err) {
                     return res.status(500).send({
                         success: false,
                         message: "Error: server error"
                     });
                 }
-                console.log("User " + req.params.userID + " has successfully submitted the assignment");
-                console.log(assignment);
-                return res.status(200).send({
-                    success: true,
-                    message: "User " + req.params.userID + " has successfully submitted the assignment"
-                });
+                var submissions = [];
+                for(var i=0; i<assignment.submissions.length; i++){
+                    var submission = assignment.submissions[i];
+                    if(submission.user!=req.params.userID){
+                        submissions.push(submission);
+                    }
+                }
+                File.find({
+                    user_id: req.user_id,
+                    originalname: req.file.originalname
+                }, function(err, files){
+                    if (err) {
+                        return res.status(500).send({
+                            success: false,
+                            message: "Error: Server error"
+                        });
+                    }
+                    req.fileID = files[files.length-1]._id; //Get Latest file submitted by user
+                    var object = {"user":req.user_id, "file":req.fileID};
+                    submissions.push(object);
+                    
+                    Assignment.findOneAndUpdate({
+                        _id: req.params.assignmentID,
+                        isDeleted: false,
+                    },{
+                        "$set":{
+                            submissions:submissions
+                        }
+                    },null, function(err, assignment){
+                        if (err) {
+                            return res.status(500).send({
+                                success: false,
+                                message: "Error: Server error"
+                            });
+                        }
+                        console.log("User " + req.params.userID + " has successfully submitted the assignment");
+                        return res.status(200).send({
+                            success: true,
+                            message: "User " + req.params.userID + " has successfully submitted the assignment"
+                        });
+                    })
+                })
             });
+    })
+
+    app.get('/api/assignments/:assignmentID/submissions', requireRole('prof'), function(req,res){
+        Assignment.find({
+            _id:req.params.assignmentID
+        }, function(err, assignments){
+            if(err){
+                return res.status(500).send({
+                    success: false,
+                    message: "Error: server error"
+                });
+            }
+            if(!assignments){
+                return res.status(404).send({
+                    success: false,
+                    message: 'Error: No such assignment found'
+                });
+            }
+            var assignment = assignments[0];
+            if(assignment.submissions.length){
+                return res.status(200).send({
+                    success:true,
+                    message: "Assignment submissions successfully retrieved",
+                    data: {assignment}
+                })
+            }
+            else{
+                return res.status(404).send({
+                    success: false,
+                    message: 'Error: No submissions for this assignment'
+                });
+            }
+        })
+    })
+
+    app.get('/api/assignments/:fileID/download', requireRole('prof'), downloadFile(dir));
+
+    app.get('/api/assignments/:assignmentID/details', function(req,res){
+        Assignment.find({
+            _id:req.params.assignmentID,
+            isDeleted:false
+        }, function(err,assignments){
+            if(err){
+                return res.status(500).send({
+                    success: false,
+                    message: "Error: server error"
+                });
+            }
+            if(!assignments){
+                return res.status(404).send({
+                    success: false,
+                    message: 'Error: No such assignment found'
+                });
+            }
+            var assignment = assignments[0].toObject();
+            delete assignment.submissions;
+            return res.status(200).send({
+                success:true,
+                message:"Assignment Details successfully retrieved",
+                data:{assignment}
+            })
+        })
     })
 }
 

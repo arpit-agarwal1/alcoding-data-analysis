@@ -1,28 +1,28 @@
 var multer = require('multer');
 const User = require('../models/User');
 const File = require('../models/Files');
-var Course = require('../models/Assignments/Course');
-var Assignment = require('../models/Assignments/Assignment');
-var connect = require('connect');
+var Course = require('../models/assignments/Course');
+var Assignment = require('../models/assignments/Assignment');
+// var connect = require('connect');
 var fs = require("fs");
 var path = require('path');
 var keyName = "inputFile" //Change according to your key name for file
 
-// Adds the directory
-var addDirectory = function (dir) {
-    if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir);
-    }
-}
-
 var diskStorage = function (dir) {
     var storage = multer.diskStorage({
         destination: function (req, file, cb) {
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir);
+            }            
             cb(null, dir);
         },
         filename: function (req, file, cb) {
             cb(null, file.originalname);
-        }
+        },
+        onError: function (err, next) {
+            console.log('error', err);
+            next(err);
+        },
         //TODO: Make better cryptic naming convention for files
     });
     return multer({ storage: storage });
@@ -41,7 +41,7 @@ var fileUpload = function (req, res, next) {
         }
         else {
             var uploadFile = new File();
-
+            
             uploadFile.originalname = req.file.originalname;
             uploadFile.encoding = req.file.encoding;
             uploadFile.mimetype = req.file.mimetype;
@@ -58,7 +58,7 @@ var fileUpload = function (req, res, next) {
                     });
                 }
                 console.log(file._id + " Added to DB.");
-
+                req.fileID = file._id;
                 User.findOneAndUpdate({
                     _id: req.user_id
                 }, {
@@ -139,18 +139,25 @@ var assignmentCheck = function (req, res, next) {
     next();
 }
 
-var fileDB = (function(dir) {
-    var chain = connect();
-    [diskStorage(dir).single(keyName), fileUpload].forEach(function(middleware) {
-      chain.use(middleware);
-    });
-    return chain;
-})();
+// var fileDB = function(middleware) {
+//     if (!middleware.length) {
+//         return function(_req, _res, next) { next(); };
+//     }
+//     var head = middleware[0];
+//     var tail = middleware.slice(1);
 
-var retrieveFile = function (dir) {
-    return function (req, res) {
+//     return function(req, res, next) {
+//         head(req, res, function(err) {
+//             if (err) return next(err);
+//             compose(tail)(req, res, next);
+//         });
+//     };
+// }
+
+var downloadFile = function(dir) {
+    return function(req,res,next){
         File.find({
-            _id: req.params.fileid
+            _id: req.params.fileID
         }, function (err, files) {
             if (err) {
                 return res.status(500).send({
@@ -158,24 +165,28 @@ var retrieveFile = function (dir) {
                     message: "Error: server error"
                 });
             }
-            else if (files.length == 0) {
+            if (files.length == 0) {
                 return res.status(404).send({
                     success: false,
-                    message: "Error: No file found with this name"
+                    message: "Error: No file found with this id"
                 });
             }
             var file = files[0];
             var filePath = path.join(dir, file.originalname);
-            var stream = fs.createReadStream(filePath);
-            stream.on('error', function (error) {
-                res.writeHead(404, 'Not Found');
-                res.end();
-            });
-            stream.pipe(res);
+            res.download(filePath, file._id.toString()+'.'+file.originalname.split('.')[1], function(err){
+                if(err){
+                    return res.status(500).send({
+                        success: false,
+                        message: "Error: server error"
+                    });
+                }
+            })
         });
     }
 }
+
 //TODO: Make file downloadable
 //TODO: Delete file endpoint
 
-module.exports = { retrieveFile, fileDB, assignmentCheck, addDirectory };
+module.exports = { diskStorage, fileUpload, assignmentCheck, downloadFile };
+// module.exports = { fileDB, assignmentCheck, downloadFile };

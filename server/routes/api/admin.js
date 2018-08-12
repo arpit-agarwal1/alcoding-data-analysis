@@ -1,21 +1,21 @@
 const User = require('../../models/User');
 const File = require('../../models/Files');
 var requireRole = require('../../middleware/Token').requireRole;
-var fileDB = require('../../middleware/fileStorage').fileDB;
-var addDirectory = require('../../middleware/fileStorage').addDirectory;
+// var fileDB = require('../../middleware/fileStorage').fileDB;
+var diskStorage = require('../../middleware/fileStorage').diskStorage;
+var fileUpload = require('../../middleware/fileStorage').fileUpload;
 var retrieveFile = require('../../middleware/fileStorage').retrieveFile;
+var fs = require("fs");
 var dir = process.cwd() + '/../temp';
+var keyName = "inputFile";
 
 module.exports = (app) => {
     app.post('/api/admin/signup', requireRole("admin"), function (req, res) {
-
-        // TODO: Change Email to usn
 
         var usn = req.body.usn;
         var firstName = req.body.firstName;
         var lastName = req.body.lastName;
         var email = req.body.email;
-        var password = req.body.password;
         var role = req.body.role;
 
         if (!firstName) {
@@ -30,17 +30,10 @@ module.exports = (app) => {
                 message: 'Error: usn cannot be blank.'
             });
         }
-        if (!password) {
-            return res.status(400).send({
-                success: false,
-                message: 'Error: Password cannot be blank.'
-            });
-        }
 
         // Process data
         usn = ('' + usn).toUpperCase().trim();
         email = ('' + email).toLowerCase().trim();
-        password = '' + password;
 
         // Deduplication flow
         User.find({
@@ -64,7 +57,7 @@ module.exports = (app) => {
             newUser.name.firstName = firstName;
             if (lastName) { newUser.name.lastName = lastName; }
             if (email) { newUser.basicInfo.email = email; }
-            newUser.password = newUser.generateHash(password);
+            newUser.password = newUser.generateHash(usn);
         
             if (role) {
                 if (role == "admin") {
@@ -91,7 +84,7 @@ module.exports = (app) => {
         });
     }); // end of sign up endpoint
 
-    app.post('/api/admin/upload', requireRole("admin"), addDirectory(dir), fileDB(dir), function (req, res) {
+    app.post('/api/admin/upload', requireRole("admin"), diskStorage(dir).single(keyName), fileUpload, function (req, res) {
         if (!req.file) {
             return res.status(400).send({
                 success: false,
@@ -103,15 +96,6 @@ module.exports = (app) => {
                 success: true,
                 message: "File uploaded and added to DB",
                 data: req.file
-            });
-        }
-    });
-
-    app.get('/api/admin/file/:fileid', requireRole('admin'), retrieveFile(dir) ,function (req, res) {
-        if (!req.params.fileid) {
-            return res.status(400).send({
-                success: false,
-                message: "Error: file_id has not been entered in parameters"
             });
         }
     });
